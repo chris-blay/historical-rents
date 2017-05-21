@@ -37,10 +37,11 @@ _HEADERS = {
 class Apartment(object):
     'Information about an apartment.'
 
-    def __init__(self, unit, rent, size):
+    def __init__(self, unit, rent, size, beds):
         self.unit = unit
         self.rent = rent
         self.size = size
+        self.beds = beds
 
     @property
     def per_sq_ft(self):
@@ -48,11 +49,11 @@ class Apartment(object):
         return self.rent / self.size
 
     def __str__(self):
-        return ('Unit {0.unit}: rent={0.rent} size={0.size}'
+        return ('Unit {0.unit}: rent={0.rent} size={0.size} beds={0.beds}'
                 ' per_sq_ft={0.per_sq_ft}'.format(self))
 
 class Avalon(object):
-    'Scrapes apartments information for an Avalon building.'
+    'Scrapes apartment information for an Avalon building.'
 
     _URL_TEMPLATE = ('https://api.avalonbay.com/json/reply/ApartmentSearch?'
                      'communityCode={}&_={}')
@@ -72,8 +73,7 @@ class Avalon(object):
         info = requests.get(self._url, headers=_HEADERS).json()
         for available_floor_plan_type in \
                 info['results']['availableFloorPlanTypes']:
-            if available_floor_plan_type['floorPlanTypeCode'] != '1BD':
-                continue
+            beds = int(available_floor_plan_type['floorPlanTypeCode'][0])
             for available_floor_plan in \
                     available_floor_plan_type['availableFloorPlans']:
                 size = available_floor_plan['estimatedSize']
@@ -81,7 +81,7 @@ class Avalon(object):
                     for apartment in finish_package['apartments']:
                         yield Apartment(apartment['apartmentNumber'],
                                         apartment['pricing']['effectiveRent'],
-                                        size)
+                                        size, beds)
 
 class Equity(object):
     'Scrapes apartment information for an Equity building.'
@@ -110,12 +110,11 @@ class Equity(object):
     def apartments(self):
         'Yields apartments for this building.'
         for bedroom_type in self._info['BedroomTypes']:
-            if bedroom_type['BedroomCount'] != 1:
-                continue
             for available_unit in bedroom_type['AvailableUnits']:
                 yield Apartment(available_unit['UnitId'],
                                 available_unit['BestTerm']['Price'],
-                                available_unit['SqFt'])
+                                available_unit['SqFt'],
+                                bedroom_type['BedroomCount'])
 
 BUILDINGS = [
     Avalon('Avalon Mission Bay', 'CA067'),
@@ -131,24 +130,33 @@ def main():
     parser = argparse.ArgumentParser(
         description='Scrapes current rental information'
                     ' for configured buildings')
+    parser.add_argument('--min_beds', type=int, help='minimum number of beds')
+    parser.add_argument('--max_beds', type=int, help='maximum number of beds')
     parser.add_argument('-b', '--buildings', action='store_true',
                         help='show configured buildings and exit')
     parser.add_argument('building', nargs='*',
                         help='zero or more buildings to scrape. specifying no'
                              ' buildings scrapes all configured buildings')
     args = parser.parse_args()
+    if (args.min_beds is not None and args.max_beds is not None
+            and args.min_beds > args.max_beds):
+        sys.exit('Error! min_beds={} is greater than max_beds={}'.format(
+            args.min_beds, args.max_beds))
     if args.buildings:
         print('# Buildings')
         for building in BUILDINGS:
             print(building.name)
-        print()
-        sys.exit()
+        sys.exit('')
     for building in BUILDINGS:
         if args.building and building.name not in args.building:
             continue
         print('# {}'.format(building.name))
         by_size = collections.defaultdict(list)
         for apartment in sorted(building.apartments, key=lambda x: x.unit):
+            if args.min_beds is not None and args.min_beds > apartment.beds:
+                continue
+            if args.max_beds is not None and args.max_beds < apartment.beds:
+                continue
             print(apartment)
             by_size[apartment.size].append(apartment.rent)
         for size in sorted(by_size.keys()):

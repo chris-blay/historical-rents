@@ -22,6 +22,7 @@ from __future__ import (absolute_import, division, generators, nested_scopes,
 
 import argparse
 import collections
+import csv
 import json
 import re
 import sys
@@ -125,6 +126,19 @@ BUILDINGS = [
         'san-francisco-bay/south-san-francisco/south-city-station-apartments'),
 ]
 
+def _check_beds(args):
+    if (args.min_beds is not None and args.max_beds is not None
+            and args.min_beds > args.max_beds):
+        sys.exit('Error! min_beds={} is greater than max_beds={}'.format(
+            args.min_beds, args.max_beds))
+
+def _maybe_print_buildings(args):
+    if args.buildings:
+        print('# Buildings')
+        for building in BUILDINGS:
+            print(building.name)
+        sys.exit()
+
 def main():
     'Main method for this script.'
     parser = argparse.ArgumentParser(
@@ -134,31 +148,37 @@ def main():
     parser.add_argument('--max_beds', type=int, help='maximum number of beds')
     parser.add_argument('-b', '--buildings', action='store_true',
                         help='show configured buildings and exit')
+    parser.add_argument('--csv', action='store_const', const=csv.DictWriter(
+        sys.stdout, ('timestamp', 'bldg', 'unit', 'rent', 'size', 'beds')),
+                        help='output in CSV format. omits mean rent per apt '
+                             'size. does not apply to `--buildings`')
     parser.add_argument('building', nargs='*',
                         help='zero or more buildings to scrape. specifying no'
                              ' buildings scrapes all configured buildings')
     args = parser.parse_args()
-    if (args.min_beds is not None and args.max_beds is not None
-            and args.min_beds > args.max_beds):
-        sys.exit('Error! min_beds={} is greater than max_beds={}'.format(
-            args.min_beds, args.max_beds))
-    if args.buildings:
-        print('# Buildings')
-        for building in BUILDINGS:
-            print(building.name)
-        sys.exit('')
+    _maybe_print_buildings(args)
+    _check_beds(args)
     for building in BUILDINGS:
         if args.building and building.name not in args.building:
             continue
-        print('# {}'.format(building.name))
-        by_size = collections.defaultdict(list)
+        if not args.csv:
+            print('# {}'.format(building.name))
+            by_size = collections.defaultdict(list)
+        else:
+            timestamp = int(time.time())
         for apartment in sorted(building.apartments, key=lambda x: x.unit):
             if args.min_beds is not None and args.min_beds > apartment.beds:
                 continue
             if args.max_beds is not None and args.max_beds < apartment.beds:
                 continue
-            print(apartment)
-            by_size[apartment.size].append(apartment.rent)
+            if args.csv:
+                args.csv.writerow(dict(
+                    timestamp=timestamp, bldg=building.name, **vars(apartment)))
+            else:
+                print(apartment)
+                by_size[apartment.size].append(apartment.rent)
+        if args.csv:
+            continue
         for size in sorted(by_size.keys()):
             print('Size {}: {}'.format(
                 size, sum(by_size[size]) / len(by_size[size]) / size))
